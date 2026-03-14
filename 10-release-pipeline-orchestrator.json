@@ -1,0 +1,203 @@
+{
+  "name": "10 - Release Pipeline Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-release-pipeline",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "w10-0001",
+      "name": "Webhook - Release Published",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 400],
+      "webhookId": "release-pipeline-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            { "value1": "={{ $json.body.action }}", "operation": "equal", "value2": "published" }
+          ]
+        }
+      },
+      "id": "w10-0002",
+      "name": "Filter - Published Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.body.repository.full_name }}/releases?per_page=2",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w10-0003",
+      "name": "GitHub - Get Last 2 Releases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Webhook - Release Published').item.json.body.repository.full_name }}/commits?sha={{ $('Webhook - Release Published').item.json.body.release.tag_name }}&per_page=50",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w10-0004",
+      "name": "GitHub - Get Recent Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 480],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhookBody = $('Webhook - Release Published').item.json.body;\nconst release = webhookBody.release;\nconst repo = webhookBody.repository;\n\nconst releases = $('GitHub - Get Last 2 Releases').item.json;\nconst commits = $('GitHub - Get Recent Commits').item.json;\n\n// ── Build changelog from commit messages ──────────────────────────\nconst commitList = Array.isArray(commits) ? commits : [];\n\nconst CONV_COMMIT = [\n  { prefix: /^feat(\\(.*?\\))?:/i,     section: '✨ Features',     items: [] },\n  { prefix: /^fix(\\(.*?\\))?:/i,      section: '🐛 Bug Fixes',    items: [] },\n  { prefix: /^perf(\\(.*?\\))?:/i,     section: '⚡ Performance',   items: [] },\n  { prefix: /^docs(\\(.*?\\))?:/i,     section: '📚 Documentation', items: [] },\n  { prefix: /^refactor(\\(.*?\\))?:/i, section: '♻️ Refactoring',   items: [] },\n  { prefix: /^chore(\\(.*?\\))?:/i,    section: '🔧 Maintenance',   items: [] },\n];\nconst OTHER = { section: '📝 Other Changes', items: [] };\n\nfor (const commit of commitList.slice(0, 30)) {\n  const msg = (commit.commit?.message || '').split('\\n')[0].trim();\n  const sha = (commit.sha || '').substring(0, 7);\n  const author = commit.commit?.author?.name || 'unknown';\n  const url = commit.html_url || '';\n  const entry = `- ${msg} ([\\`${sha}\\`](${url})) — *${author}*`;\n\n  let matched = false;\n  for (const cat of CONV_COMMIT) {\n    if (cat.prefix.test(msg)) { cat.items.push(entry); matched = true; break; }\n  }\n  if (!matched) OTHER.items.push(entry);\n}\n\nconst allSections = [...CONV_COMMIT, OTHER].filter(s => s.items.length > 0);\nconst changelogMd = allSections.map(s => `### ${s.section}\\n${s.items.join('\\n')}`).join('\\n\\n');\n\n// ── Release metadata ──────────────────────────────────────────────\nconst prevRelease = Array.isArray(releases) && releases.length > 1 ? releases[1] : null;\nconst isPrerelease = release.prerelease;\nconst tag = release.tag_name;\nconst releaseName = release.name || tag;\nconst publishedAt = new Date(release.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });\nconst author = release.author?.login || 'unknown';\nconst totalCommits = commitList.length;\n\n// ── Stats ─────────────────────────────────────────────────────────\nconst featCount   = CONV_COMMIT.find(c => c.section.includes('Feature'))?.items.length || 0;\nconst fixCount    = CONV_COMMIT.find(c => c.section.includes('Bug'))?.items.length || 0;\nconst contributors = [...new Set(commitList.map(c => c.commit?.author?.name).filter(Boolean))];\n\n// ── Formatted changelog for GitHub release body update ───────────\nconst fullChangelog = `## What's Changed\\n\\n${changelogMd}\\n\\n**Full Changelog**: ${prevRelease ? `[${prevRelease.tag_name}...${tag}](${repo.html_url}/compare/${prevRelease.tag_name}...${tag})` : repo.html_url + '/commits/' + tag}`;\n\n// ── HTML email body ───────────────────────────────────────────────\nconst htmlEmail = `<div style=\"font-family:Arial,sans-serif;max-width:640px;margin:0 auto\">\n  <div style=\"background:#24292e;padding:24px;border-radius:8px 8px 0 0;text-align:center\">\n    <h1 style=\"color:white;margin:0\">${isPrerelease ? '🧪 Pre-release' : '🚀 Release'}: ${releaseName}</h1>\n    <p style=\"color:#8b949e;margin:8px 0 0\">${repo.full_name} · ${publishedAt}</p>\n  </div>\n  <div style=\"background:#f6f8fa;padding:24px;border:1px solid #e1e4e8;border-radius:0 0 8px 8px\">\n    <div style=\"display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap\">\n      <div style=\"background:white;border:1px solid #e1e4e8;border-radius:8px;padding:16px;flex:1;text-align:center;min-width:100px\">\n        <div style=\"font-size:28px;font-weight:bold;color:#0366d6\">${totalCommits}</div>\n        <div style=\"color:#586069;font-size:12px\">Commits</div>\n      </div>\n      <div style=\"background:white;border:1px solid #e1e4e8;border-radius:8px;padding:16px;flex:1;text-align:center;min-width:100px\">\n        <div style=\"font-size:28px;font-weight:bold;color:#28a745\">${featCount}</div>\n        <div style=\"color:#586069;font-size:12px\">Features</div>\n      </div>\n      <div style=\"background:white;border:1px solid #e1e4e8;border-radius:8px;padding:16px;flex:1;text-align:center;min-width:100px\">\n        <div style=\"font-size:28px;font-weight:bold;color:#e36209\">${fixCount}</div>\n        <div style=\"color:#586069;font-size:12px\">Bug Fixes</div>\n      </div>\n      <div style=\"background:white;border:1px solid #e1e4e8;border-radius:8px;padding:16px;flex:1;text-align:center;min-width:100px\">\n        <div style=\"font-size:28px;font-weight:bold;color:#6f42c1\">${contributors.length}</div>\n        <div style=\"color:#586069;font-size:12px\">Contributors</div>\n      </div>\n    </div>\n    <h2>Changelog</h2>\n    <pre style=\"background:white;border:1px solid #e1e4e8;border-radius:6px;padding:16px;font-size:13px;white-space:pre-wrap;overflow-x:auto\">${fullChangelog.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>\n    ${contributors.length > 0 ? `<h3>Contributors</h3><p>${contributors.map(c => `<strong>${c}</strong>`).join(', ')}</p>` : ''}\n    <div style=\"margin-top:24px;text-align:center\">\n      <a href=\"${release.html_url}\" style=\"background:#0366d6;color:white;padding:12px 28px;text-decoration:none;border-radius:6px;display:inline-block\">View Release on GitHub →</a>\n    </div>\n  </div>\n</div>`;\n\nreturn [{\n  json: {\n    tag, releaseName, publishedAt, author, isPrerelease,\n    repo_name: repo.full_name,\n    repo_url: repo.html_url,\n    release_url: release.html_url,\n    total_commits: totalCommits,\n    feat_count: featCount,\n    fix_count: fixCount,\n    contributors: contributors.join(', ') || 'N/A',\n    contributor_count: contributors.length,\n    changelog_md: fullChangelog,\n    full_changelog_text: changelogMd,\n    html_email: htmlEmail,\n    email_subject: `${isPrerelease ? '🧪' : '🚀'} ${repo.name} ${tag} ${isPrerelease ? 'Pre-release' : 'Released'}`,\n    discord_message: `${isPrerelease ? '🧪' : '🚀'} **${releaseName}** is live!\\n\\`${tag}\\` · ${repo.full_name}\\n📊 ${totalCommits} commits · ✨ ${featCount} features · 🐛 ${fixCount} fixes · 👥 ${contributors.length} contributors\\n🔗 ${release.html_url}`,\n    telegram_message: `${isPrerelease ? '🧪' : '🚀'} *${releaseName} Released*\\n\\n\\`${tag}\\` — ${repo.full_name}\\n\\n📊 ${totalCommits} commits\\n✨ ${featCount} new features\\n🐛 ${fixCount} bug fixes\\n👥 ${contributors.length} contributor${contributors.length !== 1 ? 's' : ''}\\n\\n[View on GitHub](${release.html_url})`\n  }\n}];"
+      },
+      "id": "w10-0005",
+      "name": "Build Changelog & Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_EMAIL@gmail.com",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_email }}",
+        "options": {}
+      },
+      "id": "w10-0006",
+      "name": "Gmail - Release Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1120, 240],
+      "credentials": {
+        "gmailOAuth2": { "id": "gmail-cred", "name": "Gmail OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.discord_message }}"
+      },
+      "id": "w10-0007",
+      "name": "Discord - Release Announcement",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1120, 380],
+      "credentials": {
+        "discordWebhookApi": { "id": "discord-webhook-cred", "name": "Discord Webhook" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "YOUR_GOOGLE_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Releases", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tag":           "={{ $json.tag }}",
+            "Name":          "={{ $json.releaseName }}",
+            "Published At":  "={{ $json.publishedAt }}",
+            "Author":        "={{ $json.author }}",
+            "Commits":       "={{ $json.total_commits }}",
+            "Features":      "={{ $json.feat_count }}",
+            "Bug Fixes":     "={{ $json.fix_count }}",
+            "Contributors":  "={{ $json.contributor_count }}",
+            "Pre-release":   "={{ $json.isPrerelease ? 'Yes' : 'No' }}",
+            "URL":           "={{ $json.release_url }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "w10-0008",
+      "name": "Sheets - Log Release",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1120, 520],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "google-sheets-cred", "name": "Google Sheets OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.telegram_message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": false
+        }
+      },
+      "id": "w10-0009",
+      "name": "Telegram - Release Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1120, 660],
+      "credentials": {
+        "telegramApi": { "id": "telegram-bot-cred", "name": "Telegram Bot" }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - Release Published": {
+      "main": [[{ "node": "Filter - Published Only", "type": "main", "index": 0 }]]
+    },
+    "Filter - Published Only": {
+      "main": [[
+        { "node": "GitHub - Get Last 2 Releases", "type": "main", "index": 0 },
+        { "node": "GitHub - Get Recent Commits", "type": "main", "index": 0 }
+      ]]
+    },
+    "GitHub - Get Last 2 Releases": {
+      "main": [[{ "node": "Build Changelog & Stats", "type": "main", "index": 0 }]]
+    },
+    "GitHub - Get Recent Commits": {
+      "main": [[{ "node": "Build Changelog & Stats", "type": "main", "index": 1 }]]
+    },
+    "Build Changelog & Stats": {
+      "main": [[
+        { "node": "Gmail - Release Email", "type": "main", "index": 0 },
+        { "node": "Discord - Release Announcement", "type": "main", "index": 0 },
+        { "node": "Sheets - Log Release", "type": "main", "index": 0 },
+        { "node": "Telegram - Release Alert", "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": ["github", "release", "changelog", "gmail", "discord", "sheets", "telegram"]
+}

@@ -1,0 +1,207 @@
+{
+  "name": "07 - Discord Command → Create GitHub Issue",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "discord-to-github",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000001",
+      "name": "Webhook - Discord Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "discord-github-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.content }}",
+              "operation": "startsWith",
+              "value2": "!issue"
+            }
+          ]
+        }
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000002",
+      "name": "Filter - Only !issue Commands",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $input.item.json.body.content;\nconst author = $input.item.json.body.author?.username || 'Discord User';\nconst author_id = $input.item.json.body.author?.id || '';\nconst channel = $input.item.json.body.channel_id || '';\n\n// Format: !issue Title | Body\n// Or just: !issue Title\nconst withoutCmd = content.replace(/^!issue\\s*/i, '').trim();\n\nif (!withoutCmd) {\n  return [{ json: { valid: false, error: 'Usage: `!issue Title | Description`' } }];\n}\n\nconst parts = withoutCmd.split('|');\nconst title = parts[0].trim();\nconst body = parts[1] ? parts[1].trim() : '';\n\nif (!title) {\n  return [{ json: { valid: false, error: 'Issue title cannot be empty. Usage: `!issue Title | Description`' } }];\n}\n\nconst fullBody = `${body ? body + '\\n\\n' : ''}---\\n*Created via Discord by @${author}*`;\n\nreturn [{\n  json: {\n    valid: true,\n    title: title,\n    body: fullBody,\n    author: author,\n    author_id: author_id,\n    channel_id: channel\n  }\n}];"
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000003",
+      "name": "Parse Discord Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000004",
+      "name": "Filter - Valid Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-workflow"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "title": "={{ $json.title }}",
+          "body": "={{ $json.body }}",
+          "labels": ["discord-created"]
+        },
+        "options": {}
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000005",
+      "name": "GitHub API - Create Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 180],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=✅ **Issue created!**\n[#{{ $json.number }}: {{ $json.title }}]({{ $json.html_url }})\nCreated by **{{ $node[\"Parse Discord Command\"].json.author }}**"
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000006",
+      "name": "Discord - Confirm Created",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1340, 180],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=❌ {{ $json.error }}"
+      },
+      "id": "g7h8i9j0-0007-0007-0007-000000000007",
+      "name": "Discord - Send Error",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1120, 340],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - Discord Message": {
+      "main": [
+        [
+          {
+            "node": "Filter - Only !issue Commands",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Only !issue Commands": {
+      "main": [
+        [
+          {
+            "node": "Parse Discord Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Discord Command": {
+      "main": [
+        [
+          {
+            "node": "Filter - Valid Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Valid Command": {
+      "main": [
+        [
+          {
+            "node": "GitHub API - Create Issue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord - Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub API - Create Issue": {
+      "main": [
+        [
+          {
+            "node": "Discord - Confirm Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["github", "discord", "issues", "command"]
+}

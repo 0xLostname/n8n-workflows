@@ -1,0 +1,169 @@
+{
+  "name": "04 - Daily GitHub Stats Digest → Discord",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "d4e5f6g7-0004-0004-0004-000000000001",
+      "name": "Schedule - Every Weekday 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/pulls?state=open&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-workflow"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4e5f6g7-0004-0004-0004-000000000002",
+      "name": "GitHub API - Get Open PRs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/issues?state=open&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-workflow"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4e5f6g7-0004-0004-0004-000000000003",
+      "name": "GitHub API - Get Open Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get PR data from first input, issue data from second\nconst prs = $input.all()[0]?.json || [];\nconst issues = $input.all()[1]?.json || [];\n\n// PRs don't have pull_request key on issues endpoint - filter correctly\nconst actualIssues = Array.isArray(issues) ? issues.filter(i => !i.pull_request) : [];\nconst actualPRs = Array.isArray(prs) ? prs : [];\n\n// Oldest open PR\nconst oldestPR = actualPRs.length > 0\n  ? actualPRs.sort((a,b) => new Date(a.created_at) - new Date(b.created_at))[0]\n  : null;\n\n// PRs open > 7 days\nconst stalePRs = actualPRs.filter(pr => {\n  const days = (Date.now() - new Date(pr.created_at)) / (1000 * 60 * 60 * 24);\n  return days > 7;\n});\n\n// Top 3 oldest issues\nconst oldestIssues = actualIssues\n  .sort((a,b) => new Date(a.created_at) - new Date(b.created_at))\n  .slice(0, 3);\n\nconst today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });\n\nlet prList = actualPRs.slice(0, 5).map(pr => `• [#${pr.number}](${pr.html_url}) ${pr.title}`).join('\\n') || 'None';\nlet issueList = oldestIssues.map(i => `• [#${i.number}](${i.html_url}) ${i.title}`).join('\\n') || 'None';\n\nreturn [{\n  json: {\n    today,\n    open_prs: actualPRs.length,\n    open_issues: actualIssues.length,\n    stale_prs: stalePRs.length,\n    pr_list: prList,\n    issue_list: issueList,\n    oldest_pr_title: oldestPR ? oldestPR.title : null,\n    oldest_pr_url: oldestPR ? oldestPR.html_url : null,\n    oldest_pr_days: oldestPR ? Math.floor((Date.now() - new Date(oldestPR.created_at)) / (1000*60*60*24)) : 0\n  }\n}];"
+      },
+      "id": "d4e5f6g7-0004-0004-0004-000000000004",
+      "name": "Build Digest Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=📊 **Daily GitHub Digest — {{ $json.today }}**\n\n🔀 Open PRs: **{{ $json.open_prs }}** {{ $json.stale_prs > 0 ? '(' + $json.stale_prs + ' stale >7d ⚠️)' : '✅' }}\n🐛 Open Issues: **{{ $json.open_issues }}**\n\n**Recent PRs:**\n{{ $json.pr_list }}\n\n**Oldest Issues:**\n{{ $json.issue_list }}\n{{ $json.oldest_pr_title ? '\\n⏰ Oldest PR open ' + $json.oldest_pr_days + ' days: [' + $json.oldest_pr_title + '](' + $json.oldest_pr_url + ')' : '' }}"
+      },
+      "id": "d4e5f6g7-0004-0004-0004-000000000005",
+      "name": "Discord - Post Digest",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Every Weekday 9am": {
+      "main": [
+        [
+          {
+            "node": "GitHub API - Get Open PRs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GitHub API - Get Open Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub API - Get Open PRs": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub API - Get Open Issues": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Summary",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Build Digest Summary": {
+      "main": [
+        [
+          {
+            "node": "Discord - Post Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["github", "discord", "scheduled", "digest"]
+}

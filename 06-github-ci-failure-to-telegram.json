@@ -1,0 +1,136 @@
+{
+  "name": "06 - GitHub CI Failure → Telegram Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-actions",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "f6g7h8i9-0006-0006-0006-000000000001",
+      "name": "Webhook - GitHub Actions Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "github-actions-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.action }}",
+              "operation": "equal",
+              "value2": "completed"
+            },
+            {
+              "value1": "={{ $json.body.workflow_run?.conclusion }}",
+              "operation": "equal",
+              "value2": "failure"
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "f6g7h8i9-0006-0006-0006-000000000002",
+      "name": "Filter - Only Failed Runs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const run = $input.item.json.body.workflow_run;\nconst repo = $input.item.json.body.repository;\n\nconst durationSec = run.updated_at && run.run_started_at\n  ? Math.round((new Date(run.updated_at) - new Date(run.run_started_at)) / 1000)\n  : 0;\n\nconst branch = run.head_branch;\nconst commit = run.head_sha ? run.head_sha.substring(0, 7) : 'unknown';\nconst commitMsg = run.head_commit?.message ? run.head_commit.message.split('\\n')[0] : 'No commit message';\nconst actor = run.actor?.login || 'unknown';\n\nreturn [{\n  json: {\n    workflow_name: run.name,\n    run_number: run.run_number,\n    run_url: run.html_url,\n    repo_name: repo.full_name,\n    repo_url: repo.html_url,\n    branch: branch,\n    commit: commit,\n    commit_url: `${repo.html_url}/commit/${run.head_sha}`,\n    commit_message: commitMsg,\n    actor: actor,\n    duration: durationSec,\n    event: run.event,\n    message: `🔴 CI FAILED\\n\\n*${run.name}* #${run.run_number}\\n*Repo:* [${repo.full_name}](${repo.html_url})\\n*Branch:* \\`${branch}\\`\\n*Commit:* [\\`${commit}\\`](${repo.html_url}/commit/${run.head_sha}) ${commitMsg}\\n*Triggered by:* ${actor} via ${run.event}\\n*Duration:* ${durationSec}s\\n\\n[View Failed Run](${run.html_url})`\n  }\n}];"
+      },
+      "id": "f6g7h8i9-0006-0006-0006-000000000003",
+      "name": "Format Failure Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 240]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "f6g7h8i9-0006-0006-0006-000000000004",
+      "name": "Telegram - Send Failure Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [900, 240],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-cred",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=🔴 **CI FAILED** — `{{ $json.workflow_name }}` #{{ $json.run_number }}\n**{{ $json.repo_name }}** · branch `{{ $json.branch }}` · commit `{{ $json.commit }}`\n> {{ $json.commit_message }}\nBy **{{ $json.actor }}** · Ran for {{ $json.duration }}s\n🔗 {{ $json.run_url }}"
+      },
+      "id": "f6g7h8i9-0006-0006-0006-000000000005",
+      "name": "Discord - Mirror Alert",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [900, 380],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - GitHub Actions Event": {
+      "main": [
+        [
+          {
+            "node": "Filter - Only Failed Runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Only Failed Runs": {
+      "main": [
+        [
+          {
+            "node": "Format Failure Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Failure Data": {
+      "main": [
+        [
+          {
+            "node": "Telegram - Send Failure Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Discord - Mirror Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["github", "telegram", "discord", "ci", "actions"]
+}

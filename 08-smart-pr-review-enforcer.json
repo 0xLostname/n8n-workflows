@@ -1,0 +1,204 @@
+{
+  "name": "08 - Smart PR Review Enforcer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-pr-enforcer",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "w08-0001",
+      "name": "Webhook - PR Opened",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 400],
+      "webhookId": "pr-enforcer-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.action }}",
+              "operation": "equal",
+              "value2": "opened"
+            }
+          ]
+        }
+      },
+      "id": "w08-0002",
+      "name": "Filter - PR Opened Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.body.repository.full_name }}/pulls/{{ $json.body.pull_request.number }}/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w08-0003",
+      "name": "GitHub API - Get Changed Files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 320],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $input.item.json;\nconst pr = $input.item.json._pr || {};\n\n// Get the PR data passed from previous node via $('Webhook - PR Opened')\nconst webhookData = $('Webhook - PR Opened').item.json.body;\nconst pullRequest = webhookData.pull_request;\nconst repo = webhookData.repository;\n\nconst filePaths = Array.isArray(files) ? files.map(f => f.filename) : [];\n\n// Define critical path patterns and their owners\nconst CRITICAL_PATHS = [\n  { pattern: /auth|login|oauth|jwt|session|password/i, zone: 'auth', reviewers: ['YOUR_SECURITY_REVIEWER'], label: 'needs-security-review', emoji: '🔐' },\n  { pattern: /payment|billing|stripe|invoice|checkout|pricing/i, zone: 'payments', reviewers: ['YOUR_PAYMENTS_REVIEWER'], label: 'needs-payments-review', emoji: '💳' },\n  { pattern: /\\.env|config\\.|secrets?\\.|credentials?/i, zone: 'config', reviewers: ['YOUR_DEVOPS_REVIEWER'], label: 'needs-devops-review', emoji: '⚙️' },\n  { pattern: /migration|schema\\.sql|alembic|prisma.*schema/i, zone: 'database', reviewers: ['YOUR_DB_REVIEWER'], label: 'needs-db-review', emoji: '🗄️' },\n  { pattern: /dockerfile|docker-compose|\\.github\\/workflows|ci\\.yml|deploy/i, zone: 'infrastructure', reviewers: ['YOUR_DEVOPS_REVIEWER'], label: 'needs-infra-review', emoji: '🏗️' }\n];\n\nconst triggered = [];\nconst allReviewers = new Set();\nconst labelsToAdd = ['review-required'];\nlet checklistItems = [];\n\nfor (const file of filePaths) {\n  for (const rule of CRITICAL_PATHS) {\n    if (rule.pattern.test(file)) {\n      if (!triggered.find(t => t.zone === rule.zone)) {\n        triggered.push({ ...rule, file });\n        rule.reviewers.forEach(r => allReviewers.add(r));\n        labelsToAdd.push(rule.label);\n        checklistItems.push(`${rule.emoji} **${rule.zone.toUpperCase()}** — \`${file}\` touched. Requires review from: ${rule.reviewers.join(', ')}`);\n      }\n    }\n  }\n}\n\nconst isCritical = triggered.length > 0;\nconst riskLevel = triggered.length === 0 ? 'LOW' : triggered.length === 1 ? 'MEDIUM' : 'HIGH';\nconst riskEmoji = riskLevel === 'LOW' ? '🟢' : riskLevel === 'MEDIUM' ? '🟡' : '🔴';\n\nconst standardChecklist = [\n  '- [ ] Tests added/updated',\n  '- [ ] Documentation updated',\n  '- [ ] No hardcoded secrets or credentials',\n  '- [ ] Error handling considered',\n  isCritical ? '- [ ] Security implications reviewed' : null,\n  isCritical ? '- [ ] Rollback plan documented' : null\n].filter(Boolean).join('\\n');\n\nconst prBody = pullRequest.body || '';\nconst commentBody = `## ${riskEmoji} Automated PR Review Assessment\\n\\n**Risk Level:** ${riskLevel}\\n**Files Changed:** ${filePaths.length}\\n\\n${isCritical ? `### ⚠️ Critical Areas Detected\\n${checklistItems.join('\\n')}\\n\\n` : ''}### Standard Checklist\\n${standardChecklist}\\n\\n---\\n*This comment was generated automatically by the PR Review Enforcer workflow.*`;\n\nreturn [{\n  json: {\n    pr_number: pullRequest.number,\n    pr_title: pullRequest.title,\n    pr_url: pullRequest.html_url,\n    pr_author: pullRequest.user.login,\n    repo: repo.full_name,\n    files_changed: filePaths.length,\n    file_list: filePaths.slice(0, 10).join('\\n'),\n    is_critical: isCritical,\n    risk_level: riskLevel,\n    risk_emoji: riskEmoji,\n    triggered_zones: triggered.map(t => t.zone).join(', ') || 'none',\n    reviewers: [...allReviewers],\n    labels_to_add: labelsToAdd,\n    comment_body: commentBody,\n    checklist_items: checklistItems.join('\\n') || 'No critical areas detected.',\n    discord_message: `${riskEmoji} **PR #${pullRequest.number} — ${riskLevel} RISK**\\n**${pullRequest.title}**\\nby \\`${pullRequest.user.login}\\` · ${filePaths.length} files changed\\n${isCritical ? `⚠️ Critical zones: ${triggered.map(t => t.emoji + ' ' + t.zone).join(', ')}\\n` : ''}🔗 ${pullRequest.html_url}`\n  }\n}];"
+      },
+      "id": "w08-0004",
+      "name": "Analyze Risk & Build Checklist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.pr_number }}/labels",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ labels: $json.labels_to_add }) }}",
+        "options": {}
+      },
+      "id": "w08-0005",
+      "name": "GitHub API - Add Labels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/pulls/{{ $json.pr_number }}/requested_reviewers",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ reviewers: $json.reviewers }) }}",
+        "options": {}
+      },
+      "id": "w08-0006",
+      "name": "GitHub API - Request Reviewers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 360],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.pr_number }}/comments",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ body: $json.comment_body }) }}",
+        "options": {}
+      },
+      "id": "w08-0007",
+      "name": "GitHub API - Post Checklist Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $('Analyze Risk & Build Checklist').item.json.discord_message }}"
+      },
+      "id": "w08-0008",
+      "name": "Discord - Post Risk Assessment",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1340, 360],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - PR Opened": {
+      "main": [[{ "node": "Filter - PR Opened Only", "type": "main", "index": 0 }]]
+    },
+    "Filter - PR Opened Only": {
+      "main": [[{ "node": "GitHub API - Get Changed Files", "type": "main", "index": 0 }]]
+    },
+    "GitHub API - Get Changed Files": {
+      "main": [[{ "node": "Analyze Risk & Build Checklist", "type": "main", "index": 0 }]]
+    },
+    "Analyze Risk & Build Checklist": {
+      "main": [[
+        { "node": "GitHub API - Add Labels", "type": "main", "index": 0 },
+        { "node": "GitHub API - Request Reviewers", "type": "main", "index": 0 },
+        { "node": "GitHub API - Post Checklist Comment", "type": "main", "index": 0 }
+      ]]
+    },
+    "GitHub API - Post Checklist Comment": {
+      "main": [[{ "node": "Discord - Post Risk Assessment", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": ["github", "pr", "security", "review", "discord"]
+}

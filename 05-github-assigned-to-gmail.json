@@ -1,0 +1,136 @@
+{
+  "name": "05 - GitHub Issue Assigned → Gmail Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-assigned",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "e5f6g7h8-0005-0005-0005-000000000001",
+      "name": "Webhook - GitHub Issue Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "github-assigned-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.action }}",
+              "operation": "equal",
+              "value2": "assigned"
+            }
+          ]
+        }
+      },
+      "id": "e5f6g7h8-0005-0005-0005-000000000002",
+      "name": "Filter - Only Assigned Events",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.assignee.login }}",
+              "operation": "equal",
+              "value2": "YOUR_GITHUB_USERNAME"
+            }
+          ]
+        }
+      },
+      "id": "e5f6g7h8-0005-0005-0005-000000000003",
+      "name": "Filter - Assigned to Me",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const issue = $input.item.json.body.issue;\nconst repo = $input.item.json.body.repository;\nconst assignee = $input.item.json.body.assignee;\nconst sender = $input.item.json.body.sender;\n\n// Calculate priority hint from labels\nconst labels = issue.labels ? issue.labels.map(l => l.name) : [];\nconst priority = labels.includes('critical') || labels.includes('urgent') ? '🔴 URGENT' :\n                 labels.includes('high') ? '🟠 High' :\n                 labels.includes('medium') ? '🟡 Medium' : '🟢 Normal';\n\nreturn [{\n  json: {\n    issue_number: issue.number,\n    title: issue.title,\n    body: issue.body ? issue.body.substring(0, 600) : 'No description.',\n    url: issue.html_url,\n    repo: repo.full_name,\n    assignee: assignee.login,\n    assigned_by: sender.login,\n    labels: labels.join(', ') || 'none',\n    priority: priority,\n    created_at: new Date(issue.created_at).toLocaleDateString()\n  }\n}];"
+      },
+      "id": "e5f6g7h8-0005-0005-0005-000000000004",
+      "name": "Format Assignment Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_EMAIL@gmail.com",
+        "subject": "=🎯 Issue Assigned: #{{ $json.issue_number }} {{ $json.title }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n  <div style=\"background: #0366d6; padding: 20px; border-radius: 8px 8px 0 0;\">\n    <h1 style=\"color: white; margin: 0; font-size: 20px;\">🎯 New Issue Assigned to You</h1>\n  </div>\n  <div style=\"background: #f6f8fa; padding: 24px; border-radius: 0 0 8px 8px; border: 1px solid #e1e4e8;\">\n    <h2 style=\"margin-top: 0;\"><a href=\"{{ $json.url }}\" style=\"color: #0366d6; text-decoration: none;\">#{{ $json.issue_number }}: {{ $json.title }}</a></h2>\n    <table style=\"width: 100%; border-collapse: collapse;\">\n      <tr><td style=\"padding: 6px 0; font-weight: bold; width: 120px;\">Repository</td><td>{{ $json.repo }}</td></tr>\n      <tr><td style=\"padding: 6px 0; font-weight: bold;\">Assigned by</td><td>{{ $json.assigned_by }}</td></tr>\n      <tr><td style=\"padding: 6px 0; font-weight: bold;\">Priority</td><td>{{ $json.priority }}</td></tr>\n      <tr><td style=\"padding: 6px 0; font-weight: bold;\">Labels</td><td>{{ $json.labels }}</td></tr>\n      <tr><td style=\"padding: 6px 0; font-weight: bold;\">Created</td><td>{{ $json.created_at }}</td></tr>\n    </table>\n    <hr style=\"border: 1px solid #e1e4e8; margin: 16px 0;\">\n    <h3>Description</h3>\n    <p style=\"color: #586069; line-height: 1.6;\">{{ $json.body }}</p>\n    <a href=\"{{ $json.url }}\" style=\"display: inline-block; background: #0366d6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 16px;\">View Issue on GitHub →</a>\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "e5f6g7h8-0005-0005-0005-000000000005",
+      "name": "Gmail - Send Assignment Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1120, 180],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-cred",
+          "name": "Gmail OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - GitHub Issue Event": {
+      "main": [
+        [
+          {
+            "node": "Filter - Only Assigned Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Only Assigned Events": {
+      "main": [
+        [
+          {
+            "node": "Filter - Assigned to Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Assigned to Me": {
+      "main": [
+        [
+          {
+            "node": "Format Assignment Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Assignment Data": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Send Assignment Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["github", "gmail", "issues", "assigned"]
+}

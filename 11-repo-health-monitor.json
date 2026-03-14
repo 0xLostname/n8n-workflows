@@ -1,0 +1,253 @@
+{
+  "name": "11 - Repo Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 8 * * 1" }
+          ]
+        }
+      },
+      "id": "w11-0001",
+      "name": "Schedule - Every Monday 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w11-0002",
+      "name": "GitHub - Repo Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 200],
+      "credentials": {
+        "httpHeaderAuth": { "id": "github-token-cred", "name": "GitHub Token" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/pulls?state=open&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w11-0003",
+      "name": "GitHub - Open PRs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 320],
+      "credentials": {
+        "httpHeaderAuth": { "id": "github-token-cred", "name": "GitHub Token" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/issues?state=open&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w11-0004",
+      "name": "GitHub - Open Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 440],
+      "credentials": {
+        "httpHeaderAuth": { "id": "github-token-cred", "name": "GitHub Token" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/actions/runs?per_page=20",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w11-0005",
+      "name": "GitHub - CI Runs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 560],
+      "credentials": {
+        "httpHeaderAuth": { "id": "github-token-cred", "name": "GitHub Token" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/commits?per_page=30",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w11-0006",
+      "name": "GitHub - Recent Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 680],
+      "credentials": {
+        "httpHeaderAuth": { "id": "github-token-cred", "name": "GitHub Token" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = Date.now();\nconst DAY = 1000 * 60 * 60 * 24;\n\nconst repoInfo = $('GitHub - Repo Info').item.json;\nconst prs = $('GitHub - Open PRs').item.json || [];\nconst allIssues = $('GitHub - Open Issues').item.json || [];\nconst ciData = $('GitHub - CI Runs').item.json || {};\nconst commits = $('GitHub - Recent Commits').item.json || [];\n\nconst issues = Array.isArray(allIssues) ? allIssues.filter(i => !i.pull_request) : [];\nconst prList = Array.isArray(prs) ? prs : [];\nconst ciRuns = ciData.workflow_runs || [];\nconst commitList = Array.isArray(commits) ? commits : [];\n\n// ── PR health ─────────────────────────────────────────────────────\nconst stalePRs   = prList.filter(pr => (now - new Date(pr.created_at)) > 7  * DAY);\nconst ancientPRs = prList.filter(pr => (now - new Date(pr.created_at)) > 30 * DAY);\nconst avgPRAgeDays = prList.length > 0\n  ? Math.round(prList.reduce((s, pr) => s + (now - new Date(pr.created_at)) / DAY, 0) / prList.length)\n  : 0;\n\n// ── Issue health ──────────────────────────────────────────────────\nconst staleIssues = issues.filter(i => (now - new Date(i.updated_at)) > 14 * DAY);\nconst unansweredIssues = issues.filter(i => i.comments === 0);\nconst avgIssueAgeDays = issues.length > 0\n  ? Math.round(issues.reduce((s, i) => s + (now - new Date(i.created_at)) / DAY, 0) / issues.length)\n  : 0;\n\n// ── CI health ────────────────────────────────────────────────────\nconst recentRuns    = ciRuns.slice(0, 10);\nconst successRuns   = recentRuns.filter(r => r.conclusion === 'success').length;\nconst failedRuns    = recentRuns.filter(r => r.conclusion === 'failure').length;\nconst ciPassRate    = recentRuns.length > 0 ? Math.round((successRuns / recentRuns.length) * 100) : 100;\nconst lastCIStatus  = ciRuns[0]?.conclusion || 'unknown';\nconst lastCIEmoji   = lastCIStatus === 'success' ? '✅' : lastCIStatus === 'failure' ? '❌' : '⚪';\n\n// ── Commit velocity ───────────────────────────────────────────────\nconst last7Days  = commitList.filter(c => (now - new Date(c.commit?.author?.date)) < 7  * DAY).length;\nconst last30Days = commitList.filter(c => (now - new Date(c.commit?.author?.date)) < 30 * DAY).length;\nconst commitAuthors = [...new Set(commitList.map(c => c.commit?.author?.name).filter(Boolean))];\nconst busFactor = commitAuthors.length;\n\n// ── Health score algorithm ────────────────────────────────────────\n// Max 100 points, deduct for problems\nlet score = 100;\nlet penalties = [];\n\n// CI pass rate (max -30)\nif (ciPassRate < 100) { const pen = Math.round((100 - ciPassRate) * 0.3); score -= pen; penalties.push(`CI pass rate ${ciPassRate}% (-${pen})`); }\n\n// Stale PRs (max -20)\nif (ancientPRs.length > 0) { const pen = Math.min(ancientPRs.length * 5, 20); score -= pen; penalties.push(`${ancientPRs.length} PR(s) >30 days old (-${pen})`); }\nelse if (stalePRs.length > 0) { const pen = Math.min(stalePRs.length * 2, 10); score -= pen; penalties.push(`${stalePRs.length} stale PR(s) (-${pen})`); }\n\n// Unanswered issues (max -15)\nif (unansweredIssues.length > 5) { const pen = Math.min(Math.round(unansweredIssues.length * 1.5), 15); score -= pen; penalties.push(`${unansweredIssues.length} unanswered issues (-${pen})`); }\n\n// Bus factor (max -15)\nif (busFactor === 1) { score -= 15; penalties.push('Bus factor: 1 — only 1 contributor (-15)'); }\nelse if (busFactor === 2) { score -= 7; penalties.push('Bus factor: 2 (-7)'); }\n\n// Low commit velocity (max -10)\nif (last7Days === 0) { score -= 10; penalties.push('No commits in last 7 days (-10)'); }\nelse if (last7Days < 3) { score -= 5; penalties.push(`Only ${last7Days} commit(s) this week (-5)`); }\n\n// High open issue count (max -10)\nif (issues.length > 50) { score -= 10; penalties.push(`${issues.length} open issues (-10)`); }\nelse if (issues.length > 20) { score -= 5; penalties.push(`${issues.length} open issues (-5)`); }\n\nscore = Math.max(0, score);\nconst grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';\nconst gradeEmoji = score >= 90 ? '🟢' : score >= 75 ? '🔵' : score >= 60 ? '🟡' : score >= 40 ? '🟠' : '🔴';\n\nconst weekLabel = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });\n\n// ── Recommendations ───────────────────────────────────────────────\nconst recs = [];\nif (ancientPRs.length > 0) recs.push(`Review or close ${ancientPRs.length} PR(s) open >30 days`);\nif (unansweredIssues.length > 3) recs.push(`Respond to ${unansweredIssues.length} issues with no comments`);\nif (ciPassRate < 80) recs.push(`CI pass rate is ${ciPassRate}% — fix failing workflows`);\nif (busFactor <= 2) recs.push('Onboard more contributors to reduce bus factor risk');\nif (last7Days === 0) recs.push('No commits this week — is the project stalled?');\n\nconst discordReport = [\n  `## ${gradeEmoji} Repo Health Report — Week of ${weekLabel}`,\n  `**Score: ${score}/100 (Grade: ${grade})**`,\n  '',\n  '**📊 Stats**',\n  `• Open PRs: ${prList.length} (${stalePRs.length} stale, ${ancientPRs.length} ancient)`,\n  `• Open Issues: ${issues.length} (${unansweredIssues.length} unanswered, ${staleIssues.length} stale)`,\n  `• CI Pass Rate: ${ciPassRate}% ${lastCIEmoji} (last 10 runs)`,\n  `• Commits this week: ${last7Days} | this month: ${last30Days}`,\n  `• Active contributors (30d): ${busFactor}`,\n  '',\n  recs.length > 0 ? `**⚠️ Recommendations**\\n${recs.map(r => `• ${r}`).join('\\n')}` : '**✅ No critical issues found!**'\n].join('\\n');\n\nreturn [{\n  json: {\n    week_label: weekLabel,\n    score, grade, grade_emoji: gradeEmoji,\n    open_prs: prList.length,\n    stale_prs: stalePRs.length,\n    ancient_prs: ancientPRs.length,\n    avg_pr_age: avgPRAgeDays,\n    open_issues: issues.length,\n    stale_issues: staleIssues.length,\n    unanswered_issues: unansweredIssues.length,\n    avg_issue_age: avgIssueAgeDays,\n    ci_pass_rate: ciPassRate,\n    ci_failed_recent: failedRuns,\n    last_ci_status: lastCIStatus,\n    commits_7d: last7Days,\n    commits_30d: last30Days,\n    bus_factor: busFactor,\n    contributors: commitAuthors.join(', '),\n    stars: repoInfo.stargazers_count || 0,\n    forks: repoInfo.forks_count || 0,\n    penalties: penalties.join('; ') || 'none',\n    recommendations: recs.join(' | ') || 'None',\n    discord_report: discordReport\n  }\n}];"
+      },
+      "id": "w11-0007",
+      "name": "Calculate Health Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 440]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.discord_report }}"
+      },
+      "id": "w11-0008",
+      "name": "Discord - Post Health Report",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [920, 320],
+      "credentials": {
+        "discordWebhookApi": { "id": "discord-webhook-cred", "name": "Discord Webhook" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "YOUR_GOOGLE_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Health Trends", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Week":               "={{ $json.week_label }}",
+            "Score":              "={{ $json.score }}",
+            "Grade":              "={{ $json.grade }}",
+            "Open PRs":           "={{ $json.open_prs }}",
+            "Stale PRs":          "={{ $json.stale_prs }}",
+            "Open Issues":        "={{ $json.open_issues }}",
+            "Unanswered Issues":  "={{ $json.unanswered_issues }}",
+            "CI Pass Rate %":     "={{ $json.ci_pass_rate }}",
+            "Commits (7d)":       "={{ $json.commits_7d }}",
+            "Commits (30d)":      "={{ $json.commits_30d }}",
+            "Bus Factor":         "={{ $json.bus_factor }}",
+            "Stars":              "={{ $json.stars }}",
+            "Forks":              "={{ $json.forks }}",
+            "Penalties":          "={{ $json.penalties }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "w11-0009",
+      "name": "Sheets - Log Health Trend",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [920, 480],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "google-sheets-cred", "name": "Google Sheets OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            { "value1": "={{ $json.score }}", "operation": "smallerEqual", "value2": 60 }
+          ]
+        }
+      },
+      "id": "w11-0010",
+      "name": "Filter - Low Score Alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [920, 620]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=⚠️ *Repo Health Alert*\n\n*Score: {{ $json.score }}/100 (Grade {{ $json.grade }})*\nWeek of {{ $json.week_label }}\n\n*Issues:*\n• {{ $json.open_prs }} open PRs ({{ $json.stale_prs }} stale)\n• {{ $json.open_issues }} open issues ({{ $json.unanswered_issues }} unanswered)\n• CI pass rate: {{ $json.ci_pass_rate }}%\n• Commits this week: {{ $json.commits_7d }}\n\n*Recommendations:*\n{{ $json.recommendations }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "w11-0011",
+      "name": "Telegram - Low Score Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1140, 560],
+      "credentials": {
+        "telegramApi": { "id": "telegram-bot-cred", "name": "Telegram Bot" }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Every Monday 8am": {
+      "main": [[
+        { "node": "GitHub - Repo Info",       "type": "main", "index": 0 },
+        { "node": "GitHub - Open PRs",        "type": "main", "index": 0 },
+        { "node": "GitHub - Open Issues",     "type": "main", "index": 0 },
+        { "node": "GitHub - CI Runs",         "type": "main", "index": 0 },
+        { "node": "GitHub - Recent Commits",  "type": "main", "index": 0 }
+      ]]
+    },
+    "GitHub - Repo Info":      { "main": [[{ "node": "Calculate Health Score", "type": "main", "index": 0 }]] },
+    "GitHub - Open PRs":       { "main": [[{ "node": "Calculate Health Score", "type": "main", "index": 1 }]] },
+    "GitHub - Open Issues":    { "main": [[{ "node": "Calculate Health Score", "type": "main", "index": 2 }]] },
+    "GitHub - CI Runs":        { "main": [[{ "node": "Calculate Health Score", "type": "main", "index": 3 }]] },
+    "GitHub - Recent Commits": { "main": [[{ "node": "Calculate Health Score", "type": "main", "index": 4 }]] },
+    "Calculate Health Score": {
+      "main": [[
+        { "node": "Discord - Post Health Report", "type": "main", "index": 0 },
+        { "node": "Sheets - Log Health Trend",    "type": "main", "index": 0 },
+        { "node": "Filter - Low Score Alert",     "type": "main", "index": 0 }
+      ]]
+    },
+    "Filter - Low Score Alert": {
+      "main": [[{ "node": "Telegram - Low Score Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": ["github", "health", "monitoring", "discord", "sheets", "telegram", "scheduled"]
+}

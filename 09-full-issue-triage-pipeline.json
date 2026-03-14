@@ -1,0 +1,254 @@
+{
+  "name": "09 - Full Issue Triage Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-issue-triage",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "id": "w09-0001",
+      "name": "Webhook - New Issue",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 400],
+      "webhookId": "issue-triage-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.action }}",
+              "operation": "equal",
+              "value2": "opened"
+            }
+          ]
+        }
+      },
+      "id": "w09-0002",
+      "name": "Filter - New Issues Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const issue = $input.item.json.body.issue;\nconst repo = $input.item.json.body.repository;\nconst title = (issue.title || '').toLowerCase();\nconst body = (issue.body || '').toLowerCase();\nconst combined = title + ' ' + body;\n\n// ── Category detection ────────────────────────────────────────────\nconst CATEGORIES = [\n  { name: 'bug', keywords: ['bug', 'error', 'crash', 'broken', 'fail', 'exception', 'traceback', 'not working', 'doesn\\'t work', 'wrong', 'incorrect'], label: 'bug', emoji: '🐛' },\n  { name: 'feature', keywords: ['feature', 'request', 'add', 'would be nice', 'could you', 'please add', 'support for', 'allow', 'enable', 'implement'], label: 'enhancement', emoji: '✨' },\n  { name: 'performance', keywords: ['slow', 'performance', 'memory', 'leak', 'lag', 'timeout', 'speed', 'optimize', 'cpu', 'ram'], label: 'performance', emoji: '⚡' },\n  { name: 'security', keywords: ['security', 'vulnerability', 'cve', 'exploit', 'injection', 'xss', 'csrf', 'auth bypass', 'privilege'], label: 'security', emoji: '🔐' },\n  { name: 'docs', keywords: ['documentation', 'docs', 'readme', 'typo', 'unclear', 'missing doc', 'example'], label: 'documentation', emoji: '📚' },\n  { name: 'question', keywords: ['how to', 'how do i', 'question', 'help', 'confused', 'understand', '?'], label: 'question', emoji: '❓' }\n];\n\nlet category = { name: 'general', label: 'needs-triage', emoji: '📋' };\nlet matchScore = 0;\nfor (const cat of CATEGORIES) {\n  const hits = cat.keywords.filter(k => combined.includes(k)).length;\n  if (hits > matchScore) { matchScore = hits; category = cat; }\n}\n\n// ── Priority scoring ──────────────────────────────────────────────\nlet priorityScore = 0;\nconst PRIORITY_SIGNALS = [\n  { pattern: /crash|critical|urgent|production|down|outage|broken in prod/i, points: 40 },\n  { pattern: /security|vulnerability|exploit/i, points: 35 },\n  { pattern: /data loss|corrupt/i, points: 30 },\n  { pattern: /error|exception|fail/i, points: 10 },\n  { pattern: /performance|slow|memory leak/i, points: 8 },\n  { pattern: /\\bsteps to reproduce\\b|reproducible/i, points: 5 },\n  { pattern: /expected.*actual|actual.*expected/i, points: 5 }\n];\nfor (const sig of PRIORITY_SIGNALS) {\n  if (sig.pattern.test(combined)) priorityScore += sig.points;\n}\n\nconst priority = priorityScore >= 40 ? { level: 'CRITICAL', label: 'priority-critical', emoji: '🔴', days: 1 }\n               : priorityScore >= 20 ? { level: 'HIGH',     label: 'priority-high',     emoji: '🟠', days: 3 }\n               : priorityScore >= 10 ? { level: 'MEDIUM',   label: 'priority-medium',   emoji: '🟡', days: 7 }\n               :                       { level: 'LOW',      label: 'priority-low',      emoji: '🟢', days: 14 };\n\n// ── Auto-assignment logic ─────────────────────────────────────────\nconst OWNER_MAP = {\n  bug: 'YOUR_BUG_TRIAGE_USER',\n  feature: 'YOUR_PM_USER',\n  performance: 'YOUR_PERF_USER',\n  security: 'YOUR_SECURITY_USER',\n  docs: 'YOUR_DOCS_USER',\n  question: 'YOUR_SUPPORT_USER',\n  general: 'YOUR_DEFAULT_USER'\n};\nconst assignee = OWNER_MAP[category.name] || OWNER_MAP.general;\n\n// ── SLA due date ─────────────────────────────────────────────────\nconst dueDate = new Date();\ndueDate.setDate(dueDate.getDate() + priority.days);\nconst dueDateStr = dueDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });\n\nconst labelsToAdd = [category.label, priority.label];\nconst commentBody = `## ${category.emoji} Automated Triage Report\\n\\n| Field | Value |\\n|---|---|\\n| **Category** | ${category.emoji} ${category.name} |\\n| **Priority** | ${priority.emoji} ${priority.level} (score: ${priorityScore}) |\\n| **Assigned to** | @${assignee} |\\n| **SLA Due** | ${dueDateStr} (${priority.days} day${priority.days > 1 ? 's' : ''}) |\\n\\n### What happens next\\n- This issue has been labelled and assigned automatically\\n- ${priority.level === 'CRITICAL' ? '🚨 **CRITICAL**: Team has been alerted immediately' : `Expected response within ${priority.days} day${priority.days > 1 ? 's' : ''}`}\\n- If this categorization is wrong, please relabel manually\\n\\n---\\n*Triaged automatically by n8n workflow*`;\n\nreturn [{\n  json: {\n    issue_number: issue.number,\n    issue_title: issue.title,\n    issue_url: issue.html_url,\n    issue_body_short: issue.body ? issue.body.substring(0, 300) : 'No description.',\n    author: issue.user.login,\n    author_url: issue.user.html_url,\n    repo: repo.full_name,\n    category_name: category.name,\n    category_label: category.label,\n    category_emoji: category.emoji,\n    priority_level: priority.level,\n    priority_label: priority.label,\n    priority_emoji: priority.emoji,\n    priority_score: priorityScore,\n    priority_days: priority.days,\n    sla_due: dueDateStr,\n    assignee: assignee,\n    labels_to_add: labelsToAdd,\n    comment_body: commentBody,\n    created_at: new Date(issue.created_at).toLocaleString(),\n    is_critical: priorityScore >= 40\n  }\n}];"
+      },
+      "id": "w09-0003",
+      "name": "Triage - Categorize & Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.issue_number }}/labels",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ labels: $json.labels_to_add }) }}",
+        "options": {}
+      },
+      "id": "w09-0004",
+      "name": "GitHub - Apply Labels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.issue_number }}",
+        "method": "PATCH",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ assignees: [$json.assignee] }) }}",
+        "options": {}
+      },
+      "id": "w09-0005",
+      "name": "GitHub - Assign Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 340],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.repo }}/issues/{{ $json.issue_number }}/comments",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "User-Agent", "value": "n8n-workflow" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ body: $json.comment_body }) }}",
+        "options": {}
+      },
+      "id": "w09-0006",
+      "name": "GitHub - Post Triage Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 480],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token-cred",
+          "name": "GitHub Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "YOUR_GOOGLE_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Issue Triage", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Issue #":        "={{ $('Triage - Categorize & Score').item.json.issue_number }}",
+            "Title":          "={{ $('Triage - Categorize & Score').item.json.issue_title }}",
+            "Author":         "={{ $('Triage - Categorize & Score').item.json.author }}",
+            "Category":       "={{ $('Triage - Categorize & Score').item.json.category_name }}",
+            "Priority":       "={{ $('Triage - Categorize & Score').item.json.priority_level }}",
+            "Priority Score": "={{ $('Triage - Categorize & Score').item.json.priority_score }}",
+            "Assigned To":    "={{ $('Triage - Categorize & Score').item.json.assignee }}",
+            "SLA Due":        "={{ $('Triage - Categorize & Score').item.json.sla_due }}",
+            "URL":            "={{ $('Triage - Categorize & Score').item.json.issue_url }}",
+            "Created At":     "={{ $('Triage - Categorize & Score').item.json.created_at }}",
+            "Status":         "=Open"
+          }
+        },
+        "options": {}
+      },
+      "id": "w09-0007",
+      "name": "Sheets - Log Triaged Issue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1120, 340],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $('Triage - Categorize & Score').item.json.priority_emoji }} **Issue #{{ $('Triage - Categorize & Score').item.json.issue_number }} — {{ $('Triage - Categorize & Score').item.json.priority_level }} PRIORITY**\n**{{ $('Triage - Categorize & Score').item.json.issue_title }}**\n{{ $('Triage - Categorize & Score').item.json.category_emoji }} Category: `{{ $('Triage - Categorize & Score').item.json.category_name }}` · Assigned: `{{ $('Triage - Categorize & Score').item.json.assignee }}`\n⏰ SLA: {{ $('Triage - Categorize & Score').item.json.sla_due }}\nby **{{ $('Triage - Categorize & Score').item.json.author }}** · 🔗 {{ $('Triage - Categorize & Score').item.json.issue_url }}"
+      },
+      "id": "w09-0008",
+      "name": "Discord - Triage Notification",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1120, 500],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "discord-webhook-cred",
+          "name": "Discord Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $('Triage - Categorize & Score').item.json.is_critical }}", "value2": true }
+          ]
+        }
+      },
+      "id": "w09-0009",
+      "name": "Filter - Critical Issues Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 180]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 *CRITICAL ISSUE OPENED*\n\n*#{{ $('Triage - Categorize & Score').item.json.issue_number }}: {{ $('Triage - Categorize & Score').item.json.issue_title }}*\n\nRepo: `{{ $('Triage - Categorize & Score').item.json.repo }}`\nBy: {{ $('Triage - Categorize & Score').item.json.author }}\nAssigned: {{ $('Triage - Categorize & Score').item.json.assignee }}\nSLA: *{{ $('Triage - Categorize & Score').item.json.sla_due }}* (1 day)\n\n{{ $('Triage - Categorize & Score').item.json.issue_url }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": false
+        }
+      },
+      "id": "w09-0010",
+      "name": "Telegram - Critical Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 120],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-cred",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - New Issue": {
+      "main": [[{ "node": "Filter - New Issues Only", "type": "main", "index": 0 }]]
+    },
+    "Filter - New Issues Only": {
+      "main": [[{ "node": "Triage - Categorize & Score", "type": "main", "index": 0 }]]
+    },
+    "Triage - Categorize & Score": {
+      "main": [[
+        { "node": "GitHub - Apply Labels", "type": "main", "index": 0 },
+        { "node": "GitHub - Assign Owner", "type": "main", "index": 0 },
+        { "node": "GitHub - Post Triage Comment", "type": "main", "index": 0 },
+        { "node": "Filter - Critical Issues Only", "type": "main", "index": 0 }
+      ]]
+    },
+    "GitHub - Post Triage Comment": {
+      "main": [[
+        { "node": "Sheets - Log Triaged Issue", "type": "main", "index": 0 }
+      ]]
+    },
+    "Sheets - Log Triaged Issue": {
+      "main": [[{ "node": "Discord - Triage Notification", "type": "main", "index": 0 }]]
+    },
+    "Filter - Critical Issues Only": {
+      "main": [[{ "node": "Telegram - Critical Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": ["github", "issues", "triage", "sheets", "discord", "telegram"]
+}
